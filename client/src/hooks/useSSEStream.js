@@ -58,11 +58,13 @@ function reducer(state, action) {
 function phaseLabelFromNumber(phase) {
   const labels = {
     1: 'PHASE 1: INITIAL REVIEW — Independent Analysis',
-    2: 'PHASE 2: DEBATE — Challenging Assumptions',
+    1.5: 'PHASE 1.5: PM SYNTHESIS — Spec v1',
+    2: 'PHASE 2: DEBATE — Challenging the Refined Spec',
+    2.5: 'PHASE 2.5: PM SYNTHESIS — Spec v2',
     3: 'PHASE 3: PRODUCT REVISION',
     35: 'PHASE 3.5: IDEA IMPROVEMENT — PM Synthesis',
     4: 'PHASE 4: FOUNDER RESPONSE',
-    5: 'PHASE 5: FINAL REVIEW',
+    5: 'PHASE 5: FINAL SPEC — Ready for Vote',
     6: 'PHASE 6: VOTING',
   }
   return labels[phase] || `Phase ${phase}`

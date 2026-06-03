@@ -1,12 +1,13 @@
 const {
   runPhase1,
+  runPMSynthesis,
   runPhase2,
-  runPhase3,
   runPhase5,
   runPhase6,
   runFinalOutput,
   runAgent,
   AGENT_ORDER,
+  BOARD_MEMBERS,
 } = require("../board");
 const AGENTS = require("../agents");
 const db = require("./db");
@@ -29,13 +30,17 @@ function setSseClients(map) {
   sseClients = map;
 }
 
-async function withRetry(fn, retries = 3, delayMs = 1000) {
+async function withRetry(fn, retries = 4, delayMs = 2000) {
   for (let i = 0; i < retries; i++) {
     try {
       return await fn();
     } catch (err) {
-      if (i === retries - 1) throw err;
-      await new Promise(r => setTimeout(r, delayMs * Math.pow(2, i)));
+      const isOverloaded = err.status === 529 || err.message?.includes('overloaded');
+      const isRetryable = isOverloaded || err.status === 503 || err.status === 502;
+      if (i === retries - 1 || !isRetryable) throw err;
+      const wait = delayMs * Math.pow(2, i);
+      console.log(`[retry] ${err.status || 'error'} — retrying in ${wait}ms (attempt ${i + 1}/${retries})`);
+      await new Promise(r => setTimeout(r, wait));
     }
   }
 }
@@ -85,14 +90,10 @@ async function runSession(sessionId, productDescription) {
 
   const contextParts = [`Product idea to evaluate: "${productDescription}"`];
   if (session?.scraped_content) {
-    contextParts.push(
-      `The founder provided a reference URL. Here is the scraped content from that page:\n\n${session.scraped_content}`
-    );
+    contextParts.push(`The founder provided a reference URL. Scraped content:\n\n${session.scraped_content}`);
   }
   if (session?.visual_analysis) {
-    contextParts.push(
-      `The founder uploaded a screenshot. Here is the Visual Analyst's assessment of that image:\n\n${session.visual_analysis}`
-    );
+    contextParts.push(`The founder uploaded a screenshot. Visual analysis:\n\n${session.visual_analysis}`);
   }
 
   const history = [{ role: "user", content: contextParts.join("\n\n---\n\n") }];
@@ -100,6 +101,7 @@ async function runSession(sessionId, productDescription) {
   cancelledSessions.delete(sessionId);
 
   try {
+    // Phase 1: Board reviews raw idea
     await withRetry(() => db.updateSessionStatus(sessionId, "reviewing"));
     const emit1 = makeEmitter(sessionId, 1);
     const p1 = await runPhase1(productDescription, trimHistory(history, 2), emit1);
@@ -108,19 +110,28 @@ async function runSession(sessionId, productDescription) {
       history.push({ role: "assistant", content: `[${AGENTS[key].name} - Phase 1]: ${response}` });
     }
 
+    // PM Synthesis 1: curates Phase 1 insights, produces Spec v1
     await withRetry(() => db.updateSessionStatus(sessionId, "debating"));
+    const emitS1 = makeEmitter(sessionId, 1);
+    const specV1 = await runPMSynthesis(trimHistory(history, 8), 1, 1, emitS1);
+    if (isCancelled(sessionId)) return;
+    history.push({ role: "assistant", content: `[Product Manager - Spec v1]: ${specV1}` });
+    await withRetry(() => db.updateCurrentSpec(sessionId, specV1));
+
+    // Phase 2: Board debates Spec v1
     const emit2 = makeEmitter(sessionId, 2);
-    const p2 = await runPhase2(trimHistory(history, 8), p1, emit2);
+    const p2 = await runPhase2(trimHistory(history, 8), specV1, emit2);
     if (isCancelled(sessionId)) return;
     for (const [key, response] of Object.entries(p2)) {
       history.push({ role: "assistant", content: `[${AGENTS[key].name} - Debate]: ${response}` });
     }
 
-    const emit3 = makeEmitter(sessionId, 3);
-    const spec = await runPhase3(trimHistory(history, 10), emit3);
+    // PM Synthesis 2: addresses debate, produces Spec v2
+    const emitS2 = makeEmitter(sessionId, 2);
+    const specV2 = await runPMSynthesis(trimHistory(history, 10), 2, 2, emitS2);
     if (isCancelled(sessionId)) return;
-    history.push({ role: "assistant", content: `[Product Manager - Revised Spec]: ${spec}` });
-    await withRetry(() => db.updateCurrentSpec(sessionId, spec));
+    history.push({ role: "assistant", content: `[Product Manager - Spec v2]: ${specV2}` });
+    await withRetry(() => db.updateCurrentSpec(sessionId, specV2));
 
     await withRetry(() => db.updateSessionStatus(sessionId, "awaiting_founder"));
     pushSse(sessionId, { type: "status_change", status: "awaiting_founder" });
@@ -169,8 +180,7 @@ async function handleFounderInput(sessionId, content) {
   // Board reacts to the PM's advocacy
   const boardPrompt = `The founder has responded and the PM has clarified their position. React from YOUR perspective only — one focused response, no summarizing others.`;
 
-  const boardMembers = AGENT_ORDER.filter(k => k !== "pm");
-  for (const agentKey of boardMembers) {
+  for (const agentKey of BOARD_MEMBERS) {
     if (isCancelled(sessionId)) break;
     const agent = AGENTS[agentKey];
     pushSse(sessionId, { type: "thinking_start", agentKey, name: agent.name, emoji: agent.emoji });

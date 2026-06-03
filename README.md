@@ -1,38 +1,55 @@
 # Product Review Board
 
-An AI-powered product review system where 9 specialized agents independently analyze your startup idea, debate it, and cast a final vote on whether it should be built.
+An AI-powered product review system where specialized agents review, debate, and iteratively **shape** your startup idea into a refined product spec — then vote on whether it's worth building.
+
+The key insight: this is not just a debate tool. After every phase, the PM synthesizes the board's feedback and produces an updated product spec. Each round of debate attacks the *latest version* of the idea, not the original. By the time voting happens, the product has been meaningfully refined.
 
 ## Agents
 
 | Agent | Role |
 |---|---|
-| 💼 PM | Moderates the session, owns and revises the product spec |
-| 🎒 Customer | Represents the end user with brutal honesty |
-| 📈 Marketing | Stress-tests acquisition, distribution, and retention |
-| 🏗 Architect | Evaluates technical feasibility and build risk |
+| 📋 PM | Synthesizes feedback, shapes the product spec after every phase, advocates for the founder |
+| 🎯 Target Customer | Represents the end user with brutal honesty |
 | 💰 Investor | Assesses market size, timing, and unit economics |
 | 🎓 Domain Expert | Surfaces industry realities the founder is ignoring |
-| ⚔ Competitor | Argues from the strongest incumbent's perspective |
-| 🔴 Red Team | Sole job is to kill the idea — no silver linings |
-| 🔍 Market Analyst | Delivers objective market intelligence and competitor mapping |
+| ⚔️ Competitor | Argues from the strongest incumbent's perspective |
+| 💀 Red Team | Sole job is to kill the idea — no silver linings |
 
 ## How It Works
 
-The session runs in 6 phases:
+```
+Phase 1: Board reviews raw idea (independently)
+    ↓
+PM Synthesis: Extracts signal, discards noise → Spec v1
+    ↓
+Phase 2: Board debates Spec v1 (not the original idea)
+    ↓
+PM Synthesis: Addresses debate, refines → Spec v2
+    ↓
+Founder Input (optional, repeatable):
+  → PM advocates on founder's behalf
+  → Board reacts
+  → "Improve Idea" button: PM synthesizes + optional founder note → updated spec
+    ↓
+Proceed to Vote:
+  → PM produces Final Spec
+  → Each agent votes YES/NO with confidence score
+  → PM delivers final board output
+    ↓
+Create Product Plan:
+  → PM generates a detailed build plan (features, stack, data models, user flows)
+  → Ready to paste into Claude or any AI coding assistant
+```
 
-1. **Initial Review** — all 9 agents analyze the idea independently
-2. **Debate** — agents challenge each other's assumptions
-3. **Product Revision** — PM produces a revised spec based on the discussion
-4. **Founder Intervention** — you respond, add constraints, or change direction
-5. **Final Review** — PM locks the definitive spec for voting
-6. **Voting** — each agent votes YES or NO with a confidence score and reasoning
+**Voting answers:** "After all this refinement, is this product still worth building?"
 
 ## Stack
 
-- **Backend** — Node.js, Express, Anthropic SDK (Claude Opus)
+- **Backend** — Node.js, Express, Anthropic SDK
+- **Models** — Claude Sonnet 4.6 (PM), Claude Haiku 4.5 (board agents)
 - **Frontend** — React 18, Vite, Tailwind CSS
-- **Database** — Neon (PostgreSQL) — stores sessions, messages, and votes
-- **Streaming** — Server-Sent Events (SSE) for real-time agent responses
+- **Database** — Neon (PostgreSQL)
+- **Streaming** — Server-Sent Events (SSE)
 
 ## Prerequisites
 
@@ -53,12 +70,6 @@ cd client && npm install && cd ..
 
 ### 2. Configure environment
 
-Copy `.env` and fill in your values:
-
-```bash
-cp .env .env.local
-```
-
 ```env
 ANTHROPIC_API_KEY=your_api_key_here
 DATABASE_URL=postgresql://...your_neon_connection_string...
@@ -66,8 +77,6 @@ PORT=3001
 ```
 
 ### 3. Apply the database schema
-
-Run the following SQL against your Neon database (via the Neon console or `psql`):
 
 ```sql
 CREATE TABLE discussion_sessions (
@@ -77,6 +86,10 @@ CREATE TABLE discussion_sessions (
   status              TEXT NOT NULL DEFAULT 'reviewing'
                         CHECK (status IN ('reviewing','debating','awaiting_founder','voting','completed')),
   current_product_spec TEXT,
+  final_output        TEXT,
+  url                 TEXT,
+  scraped_content     TEXT,
+  visual_analysis     TEXT,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -95,7 +108,7 @@ CREATE TABLE messages (
   role         TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
   content      TEXT NOT NULL,
   round_number INT NOT NULL DEFAULT 1,
-  phase        INT DEFAULT 1,
+  phase        FLOAT DEFAULT 1,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -109,67 +122,54 @@ CREATE TABLE votes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE product_plans (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL UNIQUE REFERENCES discussion_sessions(id) ON DELETE CASCADE,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE INDEX idx_messages_session ON messages(session_id);
-CREATE INDEX idx_messages_round   ON messages(session_id, round_number);
 CREATE INDEX idx_votes_session    ON votes(session_id);
 ```
 
-Agent rows are seeded automatically from `agents.js` on server start — no manual inserts needed.
+Agent rows are seeded automatically from `agents.js` on server start.
 
-## Running the Project
-
-### Web app (recommended)
+## Running
 
 ```bash
 npm run dev
 ```
 
-This starts both the Express server (port 3001) and the Vite dev server (port 5173) concurrently.
-
-Open [http://localhost:5175](http://localhost:5175).
-
-### CLI (original terminal interface)
-
-```bash
-npm start
-```
-
-The CLI runs the full 6-phase session interactively in your terminal. All existing CLI behavior is preserved.
-
-### Production build
-
-```bash
-npm run build        # builds client/dist
-npm run start:web    # serves the built client + API on port 3001
-```
+Starts Express (port 3001) + Vite (port 5173) concurrently. Open [http://localhost:5175](http://localhost:5175).
 
 ## Project Structure
 
 ```
 product-review-board/
-├── agents.js          # All agent definitions (name, emoji, system prompt)
-├── board.js           # Phase orchestration logic
-├── index.js           # CLI entry point
+├── agents.js          # Agent definitions (name, emoji, system prompt)
+├── board.js           # Phase logic (runPhase1, runPMSynthesis, runPhase2, etc.)
 │
 ├── server/
-│   ├── index.js       # Express app entry
-│   ├── db.js          # Neon/pg query helpers + seedAgents()
-│   ├── boardRunner.js # Adapts board.js phases to SSE + DB persistence
+│   ├── index.js       # Express entry
+│   ├── db.js          # Neon/pg helpers
+│   ├── boardRunner.js # Orchestrates phases, persists to DB, pushes SSE
 │   └── routes/
-│       ├── sessions.js  # GET/POST /api/sessions
-│       ├── messages.js  # GET /api/sessions/:id/messages|votes
-│       └── stream.js    # SSE stream + start/founder-input/proceed-to-vote
+│       ├── sessions.js
+│       ├── messages.js
+│       └── stream.js  # SSE + start/founder-input/improve-idea/proceed-to-vote/create-plan/stop
 │
-└── client/
-    └── src/
-        ├── components/  # React UI components
-        ├── hooks/        # useSSEStream
-        └── lib/          # API fetch helpers, agent metadata
+└── client/src/
+    ├── components/    # BoardRoom, AgentCard, ThinkingCard, FinalOutput, etc.
+    ├── hooks/         # useSSEStream (live events + history reload)
+    └── lib/           # api.js, agents.js metadata
 ```
 
-## Adding a New Agent
+## Cost per Session (approximate)
 
-1. Add the agent definition to `agents.js` (name, emoji, systemPrompt)
-2. Add its key to `AGENT_ORDER` in `board.js`
-3. Add its emoji and color to `client/src/lib/agents.js`
-4. Restart the server — it will be seeded into the DB automatically
+| Config | Cost |
+|---|---|
+| All Sonnet | ~$0.40–0.50 |
+| All Haiku | ~$0.04–0.06 |
+| Mixed (current: Haiku agents + Sonnet PM) | ~$0.08–0.15 |
