@@ -73,6 +73,17 @@ async function updateCurrentSpec(id, spec) {
   );
 }
 
+async function updateFinalOutput(id, content) {
+  await query(
+    `ALTER TABLE discussion_sessions ADD COLUMN IF NOT EXISTS final_output text`,
+    []
+  );
+  await query(
+    `UPDATE discussion_sessions SET final_output = $1 WHERE id = $2`,
+    [content, id]
+  );
+}
+
 async function getAgentIdByRoleKey(roleKey) {
   const result = await query(
     `SELECT id FROM agents WHERE role_key = $1 LIMIT 1`,
@@ -131,6 +142,37 @@ async function listVotes(session_id) {
   return result.rows;
 }
 
+async function savePlan(session_id, content) {
+  await query(
+    `CREATE TABLE IF NOT EXISTS product_plans (
+       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+       session_id uuid NOT NULL UNIQUE REFERENCES discussion_sessions(id) ON DELETE CASCADE,
+       content text NOT NULL,
+       created_at timestamptz DEFAULT now(),
+       updated_at timestamptz DEFAULT now()
+     )`,
+    []
+  );
+  await query(
+    `INSERT INTO product_plans (session_id, content)
+     VALUES ($1, $2)
+     ON CONFLICT (session_id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+    [session_id, content]
+  );
+}
+
+async function getPlan(session_id) {
+  try {
+    const result = await query(
+      `SELECT content FROM product_plans WHERE session_id = $1 LIMIT 1`,
+      [session_id]
+    );
+    return result.rows[0]?.content || null;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   seedAgents,
   createSession,
@@ -138,11 +180,14 @@ module.exports = {
   getSession,
   updateSessionStatus,
   updateCurrentSpec,
+  updateFinalOutput,
   updateProductDescription,
   getAgentIdByRoleKey,
   insertMessage,
   listMessages,
   insertVote,
   listVotes,
+  savePlan,
+  getPlan,
   query,
 };

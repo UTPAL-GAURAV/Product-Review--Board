@@ -19,7 +19,7 @@ const STATUS_COLORS = {
 }
 
 export default function BoardRoom({ session, onBack }) {
-  const { messages, phases, votes, status, finalOutput, thinkingAgent, addFounderMessage } = useSSEStream(
+  const { messages, phases, votes, status, finalOutput, thinkingAgent, plan, planGenerating, addFounderMessage } = useSSEStream(
     session.id,
     session.status
   )
@@ -53,10 +53,10 @@ export default function BoardRoom({ session, onBack }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const canFounderInput = status === 'awaiting_founder'
-  const showVoteButton = status === 'awaiting_founder'
+  const canFounderInput = status === 'awaiting_founder' && !thinkingAgent
+  const showVoteButton = status === 'awaiting_founder' && !thinkingAgent
   const showVoting = status === 'voting' || status === 'completed'
-  const boardBusy = status === 'reviewing' || status === 'debating' || status === 'voting'
+  const boardBusy = status === 'reviewing' || status === 'debating' || status === 'voting' || !!thinkingAgent
 
   // Build a flat ordered list of items to render
   const renderedPhases = new Set()
@@ -96,14 +96,6 @@ export default function BoardRoom({ session, onBack }) {
         <div className="flex items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${STATUS_COLORS[status] || 'bg-slate-600'} ${boardBusy ? 'animate-pulse' : ''}`} />
           <span className="text-xs text-slate-400">{STATUS_LABELS[status] || status}</span>
-          {boardBusy && (
-            <button
-              onClick={() => stopSession(session.id).catch(console.error)}
-              className="ml-2 px-2 py-1 text-xs bg-red-700 hover:bg-red-600 text-white rounded-lg transition-colors"
-            >
-              ■ Stop
-            </button>
-          )}
         </div>
       </div>
 
@@ -132,15 +124,55 @@ export default function BoardRoom({ session, onBack }) {
 
         {finalOutput && (
           <FinalOutput
+            sessionId={session.id}
             content={finalOutput}
             voteResults={{ yes: votes.filter(v => v.vote === 'yes').length, no: votes.filter(v => v.vote === 'no').length }}
+            plan={plan}
+            planGenerating={planGenerating}
+          />
+        )}
+
+        {/* Show Create Plan button even without final summary, for completed sessions */}
+        {status === 'completed' && !finalOutput && !plan && !planGenerating && (
+          <div className="flex justify-center py-6">
+            <button
+              onClick={() => { import('../lib/api').then(m => m.createPlan(session.id)) }}
+              className="px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white font-semibold rounded-xl transition-colors flex items-center gap-2 shadow-lg"
+            >
+              🚀 Create Product Plan
+            </button>
+          </div>
+        )}
+        {status === 'completed' && !finalOutput && planGenerating && (
+          <div className="flex justify-center py-4">
+            <div className="flex items-center gap-2 text-violet-300 text-sm">
+              <span className="animate-pulse">⚙️</span>
+              <span>PM is writing the product plan…</span>
+            </div>
+          </div>
+        )}
+        {status === 'completed' && !finalOutput && plan && (
+          <FinalOutput
+            sessionId={session.id}
+            content={null}
+            voteResults={{ yes: votes.filter(v => v.vote === 'yes').length, no: votes.filter(v => v.vote === 'no').length }}
+            plan={plan}
+            planGenerating={false}
           />
         )}
 
         <div ref={bottomRef} />
       </div>
 
-      {/* Scroll to bottom button */}
+      {/* Floating buttons */}
+      {boardBusy && (
+        <button
+          onClick={() => stopSession(session.id).catch(console.error)}
+          className="fixed bottom-24 left-6 z-50 bg-red-700 hover:bg-red-600 text-white text-xs font-semibold px-3 py-2 rounded-full shadow-lg transition-colors flex items-center gap-1"
+        >
+          ■ Stop
+        </button>
+      )}
       {showScrollBtn && (
         <button
           onClick={scrollToBottom}

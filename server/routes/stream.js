@@ -71,11 +71,33 @@ router.post("/:id/proceed-to-vote", async (req, res) => {
 
 router.post("/:id/improve-idea", async (req, res) => {
   const sessionId = req.params.id;
+  const { note = "" } = req.body;
   try {
-    boardRunner.improveIdea(sessionId).catch((err) => {
+    boardRunner.improveIdea(sessionId, note).catch((err) => {
       console.error("Improve idea error:", err.message);
     });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/:id/create-plan", async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    boardRunner.createPlan(sessionId).catch((err) => {
+      console.error("Create plan error:", err.message);
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/:id/plan", async (req, res) => {
+  try {
+    const plan = await db.getPlan(req.params.id);
+    res.json({ plan });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

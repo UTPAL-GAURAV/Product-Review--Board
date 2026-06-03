@@ -44,8 +44,12 @@ export async function proceedToVote(id) {
   return res.json()
 }
 
-export async function improveIdea(id) {
-  const res = await fetch(`${BASE}/${id}/improve-idea`, { method: 'POST' })
+export async function improveIdea(id, note = "") {
+  const res = await fetch(`${BASE}/${id}/improve-idea`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note }),
+  })
   if (!res.ok) throw new Error('Failed to improve idea')
   return res.json()
 }
@@ -53,6 +57,18 @@ export async function improveIdea(id) {
 export async function stopSession(id) {
   const res = await fetch(`${BASE}/${id}/stop`, { method: 'POST' })
   if (!res.ok) throw new Error('Failed to stop session')
+  return res.json()
+}
+
+export async function createPlan(id) {
+  const res = await fetch(`${BASE}/${id}/create-plan`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to create plan')
+  return res.json()
+}
+
+export async function getPlan(id) {
+  const res = await fetch(`${BASE}/${id}/plan`)
+  if (!res.ok) throw new Error('Failed to get plan')
   return res.json()
 }
 

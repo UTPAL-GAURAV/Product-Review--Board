@@ -16,19 +16,20 @@ async function runAgent(agentKey, conversationHistory, extraInstruction = "") {
       : []),
   ];
 
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`Agent ${agent.name} timed out after 60s`)), 60000)
-  );
+  const model = PM_AGENTS.has(agentKey) ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
+  console.log(`[agent] ${agent.name} (${model}) starting...`);
 
-  const request = client.messages.create({
-    model: PM_AGENTS.has(agentKey) ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001",
-    max_tokens: 600,
-    system: agent.systemPrompt,
-    messages,
-  });
-
-  const response = await Promise.race([request, timeout]);
-  return response.content[0].text;
+  try {
+    const response = await client.messages.create(
+      { model, max_tokens: PM_AGENTS.has(agentKey) ? 1024 : 600, system: agent.systemPrompt, messages },
+      { timeout: 60000, maxRetries: 0 }
+    );
+    console.log(`[agent] ${agent.name} done`);
+    return response.content[0].text;
+  } catch (err) {
+    console.error(`[agent] ${agent.name} error: ${err.message}`);
+    throw err;
+  }
 }
 
 async function runPhase1(productIdea, conversationHistory, emit = null) {

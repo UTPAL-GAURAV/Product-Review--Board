@@ -133,7 +133,11 @@ async function runSession(sessionId, productDescription) {
 }
 
 async function handleFounderInput(sessionId, content) {
-  const session = activeSessions.get(sessionId);
+  let session = activeSessions.get(sessionId);
+  if (!session) {
+    console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
+    session = await rebuildSession(sessionId);
+  }
   if (!session) return;
 
   const { history } = session;
@@ -153,22 +157,56 @@ async function handleFounderInput(sessionId, content) {
   const emit = makeEmitter(sessionId, round);
   await emit({ type: "phase_start", phase: 4, label: "PHASE 4: FOUNDER RESPONSE" });
 
-  const founderPrompt = `The founder has responded: "${content}"\n\nIncorporate this into your thinking. React directly to the founder's input from your perspective.`;
+  // PM advocates on behalf of the founder first
+  const pmAdvocatePrompt = `The founder has said: "${content}"\n\nAs Product Manager, your job is to:\n1. Interpret and strengthen the founder's position\n2. Answer any open questions from the board that the founder hasn't addressed\n3. Think through implications the founder may not have considered\n4. Present the founder's refined stance clearly\n\nSpeak as a thinking partner for the founder, not as a critic.`;
 
-  for (const agentKey of AGENT_ORDER) {
+  pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
+  const pmResponse = await runAgent("pm", trimHistory(history, 8), pmAdvocatePrompt);
+  pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
+  history.push({ role: "assistant", content: `[Product Manager - Founder Advocate]: ${pmResponse}` });
+  await emit({ type: "agent_message", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji, content: pmResponse, phase: 4 });
+
+  // Board reacts to the PM's advocacy
+  const boardPrompt = `The founder has responded and the PM has clarified their position. React from YOUR perspective only — one focused response, no summarizing others.`;
+
+  const boardMembers = AGENT_ORDER.filter(k => k !== "pm");
+  for (const agentKey of boardMembers) {
     if (isCancelled(sessionId)) break;
     const agent = AGENTS[agentKey];
     pushSse(sessionId, { type: "thinking_start", agentKey, name: agent.name, emoji: agent.emoji });
-    const response = await runAgent(agentKey, trimHistory(history, 8), founderPrompt);
+    const response = await runAgent(agentKey, trimHistory(history, 8), boardPrompt);
     pushSse(sessionId, { type: "thinking_end", agentKey });
     history.push({ role: "assistant", content: `[${agent.name}]: ${response}` });
     await emit({ type: "agent_message", agentKey, name: agent.name, emoji: agent.emoji, content: response, phase: 4 });
   }
 }
 
-async function improveIdea(sessionId) {
-  const session = activeSessions.get(sessionId);
-  if (!session) return;
+async function rebuildSession(sessionId) {
+  const session = await withRetry(() => db.getSession(sessionId));
+  if (!session) return null;
+
+  const messages = await withRetry(() => db.listMessages(sessionId));
+  const history = [{ role: "user", content: `Product idea to evaluate: "${session.product_description}"` }];
+  for (const m of messages) {
+    history.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
+  }
+
+  const rebuilt = { history, round: messages.length };
+  activeSessions.set(sessionId, rebuilt);
+  console.log(`[session] Rebuilt session ${sessionId} from DB (${messages.length} messages)`);
+  return rebuilt;
+}
+
+async function improveIdea(sessionId, founderNote = "") {
+  let session = activeSessions.get(sessionId);
+  if (!session) {
+    console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
+    session = await rebuildSession(sessionId);
+  }
+  if (!session) {
+    console.error(`[session] Could not rebuild session ${sessionId}`);
+    return;
+  }
 
   const { history } = session;
   const round = (session.round || 3) + 1;
@@ -177,10 +215,14 @@ async function improveIdea(sessionId) {
   const emit = makeEmitter(sessionId, round);
   await emit({ type: "phase_start", phase: 35, label: "PHASE 3.5: IDEA IMPROVEMENT — PM Synthesis" });
 
-  pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
-  const revisePrompt = `Based on all board discussion and founder input so far, produce an IMPROVED product proposal. Your job:\n1. **Preserve the core strengths** — identify what is genuinely working and keep it\n2. **Address the biggest criticisms** — directly fix the weaknesses raised by the board\n3. **Propose a new direction if needed** — if the current approach has fundamental flaws, pivot the product angle, target audience, or business model to something stronger\n4. **Present the improved idea** as a clear, compelling proposal the board can continue discussing\n\nBe bold. If the product needs a new direction to succeed, propose it.`;
+  const founderContext = founderNote
+    ? `The founder has also added this note: "${founderNote}"\n\n`
+    : "";
+
+  const revisePrompt = `${founderContext}Based on all board discussion and founder input so far, produce an IMPROVED product proposal:\n1. **Preserve the core strengths** — identify what is genuinely working and keep it\n2. **Answer open questions** — address any unresolved questions the board raised\n3. **Address the biggest criticisms** — directly fix the weaknesses\n4. **Propose a new direction if needed** — pivot angle, audience, or model if fundamentally flawed\n5. **Present the improved idea** clearly as a proposal the board can continue discussing\n\nBe bold. Think on behalf of the founder where they haven't had answers.`;
 
   try {
+    pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
     const spec = await runAgent("pm", trimHistory(history, 10), revisePrompt);
     pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
     history.push({ role: "assistant", content: `[Product Manager - Improved Idea]: ${spec}` });
@@ -197,7 +239,11 @@ async function improveIdea(sessionId) {
 }
 
 async function proceedToVote(sessionId) {
-  const session = activeSessions.get(sessionId);
+  let session = activeSessions.get(sessionId);
+  if (!session) {
+    console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
+    session = await rebuildSession(sessionId);
+  }
   if (!session) return;
 
   const { history } = session;
@@ -215,11 +261,79 @@ async function proceedToVote(sessionId) {
 
   const { voteResults } = await runPhase6(trimHistory(history, 10), emit6);
 
+  pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
   const emitFinal = makeEmitter(sessionId, 6);
-  await runFinalOutput(trimHistory(history, 10), voteResults, emitFinal);
+  await runFinalOutput(trimHistory(history, 10), voteResults, async (event) => {
+    if (event.type === "final_output") {
+      await withRetry(() => db.updateFinalOutput(sessionId, event.content));
+    }
+    await emitFinal(event);
+  });
+  pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
 
   await withRetry(() => db.updateSessionStatus(sessionId, "completed"));
   pushSse(sessionId, { type: "status_change", status: "completed" });
 }
 
-module.exports = { runSession, handleFounderInput, improveIdea, proceedToVote, cancelSession, setSseClients };
+async function createPlan(sessionId) {
+  let session = activeSessions.get(sessionId);
+  if (!session) {
+    session = await rebuildSession(sessionId);
+  }
+  if (!session) {
+    console.error(`[session] Could not rebuild session ${sessionId} for plan`);
+    return;
+  }
+
+  const { history } = session;
+  const dbSession = await withRetry(() => db.getSession(sessionId));
+
+  pushSse(sessionId, { type: "plan_generating" });
+
+  const planPrompt = `Based on the entire board discussion, votes, and final output, create a comprehensive Product Plan document optimized for handing off to an AI coding assistant (like Claude) to build the actual application.
+
+Structure the plan EXACTLY as follows:
+
+# Product Plan: [Product Name]
+
+## What It Is
+[2-3 sentence clear description of the product]
+
+## What It Is NOT
+[Bullet list of explicit scope exclusions — what will NOT be built]
+
+## Core Features (MVP)
+[Numbered list of exact features to build, each with a one-line description]
+
+## Feature Details
+[For each MVP feature: inputs, outputs, behavior, edge cases]
+
+## Technical Stack (Recommended)
+[Frontend, backend, database, auth, hosting — be specific]
+
+## Data Models
+[Key entities and their fields]
+
+## User Flows
+[Step-by-step flows for the 2-3 most important user journeys]
+
+## Out of Scope (v1)
+[Features explicitly deferred to later versions]
+
+## Success Criteria
+[How do we know the MVP is working?]
+
+Be precise and unambiguous. Every decision should be made — no "TBD" or "decide later". This document will be fed directly to an AI to build the product.`;
+
+  try {
+    const plan = await runAgent("pm", trimHistory(history, 14), planPrompt);
+    await withRetry(() => db.savePlan(sessionId, plan));
+    pushSse(sessionId, { type: "plan_ready", content: plan });
+    console.log(`[plan] Generated plan for session ${sessionId}`);
+  } catch (err) {
+    console.error(`[plan] Error generating plan: ${err.message}`);
+    pushSse(sessionId, { type: "plan_error", message: err.message });
+  }
+}
+
+module.exports = { runSession, handleFounderInput, improveIdea, proceedToVote, createPlan, cancelSession, setSseClients };

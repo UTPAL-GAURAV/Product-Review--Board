@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react'
-import { getMessages, getVotes } from '../lib/api'
+import { getMessages, getVotes, getPlan } from '../lib/api'
 import { AGENT_META } from '../lib/agents'
 
 const initialState = {
@@ -9,6 +9,8 @@ const initialState = {
   status: 'reviewing',
   finalOutput: null,
   thinkingAgent: null, // { agentKey, name, emoji }
+  plan: null,
+  planGenerating: false,
 }
 
 function reducer(state, action) {
@@ -26,6 +28,10 @@ function reducer(state, action) {
       return { ...state, finalOutput: action.content }
     case 'SET_THINKING':
       return { ...state, thinkingAgent: action.agent }
+    case 'SET_PLAN':
+      return { ...state, plan: action.content, planGenerating: false }
+    case 'SET_PLAN_GENERATING':
+      return { ...state, planGenerating: action.value }
     case 'BULK_LOAD': {
       // Reconstruct phases from messages
       const phases = []
@@ -75,9 +81,10 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
 
     async function loadHistory() {
       try {
-        const [msgs, votes] = await Promise.all([
+        const [msgs, votes, planData] = await Promise.all([
           getMessages(sessionId),
           getVotes(sessionId),
+          getPlan(sessionId).catch(() => ({ plan: null })),
         ])
 
         const messages = msgs.map(m => ({
@@ -101,6 +108,12 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
         }))
 
         dispatch({ type: 'BULK_LOAD', messages, votes: formattedVotes, status: initialStatus })
+        if (planData?.plan) dispatch({ type: 'SET_PLAN', content: planData.plan })
+
+        // Load final output from session
+        const { getSession } = await import('../lib/api')
+        const sess = await getSession(sessionId).catch(() => null)
+        if (sess?.final_output) dispatch({ type: 'SET_FINAL_OUTPUT', content: sess.final_output })
       } catch (err) {
         console.error('Failed to load history:', err)
       }
@@ -157,6 +170,12 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
           dispatch({ type: 'SET_STATUS', status: event.status })
         } else if (event.type === 'final_output') {
           dispatch({ type: 'SET_FINAL_OUTPUT', content: event.content })
+        } else if (event.type === 'plan_generating') {
+          dispatch({ type: 'SET_PLAN_GENERATING', value: true })
+        } else if (event.type === 'plan_ready') {
+          dispatch({ type: 'SET_PLAN', content: event.content })
+        } else if (event.type === 'plan_error') {
+          dispatch({ type: 'SET_PLAN_GENERATING', value: false })
         }
       }
 
