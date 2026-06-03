@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db");
 const boardRunner = require("../boardRunner");
-
 // In-memory SSE clients: Map<sessionId, res>
 const sseClients = new Map();
 boardRunner.setSseClients(sseClients);
@@ -76,6 +75,22 @@ router.post("/:id/improve-idea", async (req, res) => {
     boardRunner.improveIdea(sessionId).catch((err) => {
       console.error("Improve idea error:", err.message);
     });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/:id/stop", async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    boardRunner.cancelSession(sessionId);
+    await db.updateSessionStatus(sessionId, "awaiting_founder");
+    const sseClient = sseClients.get(sessionId);
+    if (sseClient) {
+      sseClient.write(`data: ${JSON.stringify({ type: "thinking_end", agentKey: null })}\n\n`);
+      sseClient.write(`data: ${JSON.stringify({ type: "status_change", status: "awaiting_founder" })}\n\n`);
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

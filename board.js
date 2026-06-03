@@ -3,7 +3,9 @@ const AGENTS = require("./agents");
 
 const client = new Anthropic();
 
-const AGENT_ORDER = ["pm", "customer", "growth", "architect", "investor", "expert", "competitor", "redteam", "market"];
+const AGENT_ORDER = ["pm", "customer", "growth", "investor", "expert", "competitor", "redteam"];
+
+const PM_AGENTS = new Set(["pm"]);
 
 async function runAgent(agentKey, conversationHistory, extraInstruction = "") {
   const agent = AGENTS[agentKey];
@@ -14,13 +16,18 @@ async function runAgent(agentKey, conversationHistory, extraInstruction = "") {
       : []),
   ];
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 1024,
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Agent ${agent.name} timed out after 60s`)), 60000)
+  );
+
+  const request = client.messages.create({
+    model: PM_AGENTS.has(agentKey) ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001",
+    max_tokens: 600,
     system: agent.systemPrompt,
     messages,
   });
 
+  const response = await Promise.race([request, timeout]);
   return response.content[0].text;
 }
 

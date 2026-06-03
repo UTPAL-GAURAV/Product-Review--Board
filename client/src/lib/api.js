@@ -50,6 +50,12 @@ export async function improveIdea(id) {
   return res.json()
 }
 
+export async function stopSession(id) {
+  const res = await fetch(`${BASE}/${id}/stop`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to stop session')
+  return res.json()
+}
+
 export async function getMessages(id, since = null) {
   const url = since ? `${BASE}/${id}/messages?since=${encodeURIComponent(since)}` : `${BASE}/${id}/messages`
   const res = await fetch(url)

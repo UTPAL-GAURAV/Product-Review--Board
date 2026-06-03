@@ -13,6 +13,15 @@ const db = require("./db");
 
 // In-memory session state (lost on restart, messages survive in DB)
 const activeSessions = new Map();
+const cancelledSessions = new Set();
+
+function isCancelled(sessionId) {
+  return cancelledSessions.has(sessionId);
+}
+
+function cancelSession(sessionId) {
+  cancelledSessions.add(sessionId);
+}
 
 // SSE clients map — set by stream.js
 let sseClients = null;
@@ -29,6 +38,14 @@ async function withRetry(fn, retries = 3, delayMs = 1000) {
       await new Promise(r => setTimeout(r, delayMs * Math.pow(2, i)));
     }
   }
+}
+
+// Keep only the initial context + last N assistant turns to limit token growth
+function trimHistory(history, keepLast = 6) {
+  const first = history[0] // always keep initial product context
+  const rest = history.slice(1)
+  const trimmed = rest.slice(-keepLast)
+  return [first, ...trimmed]
 }
 
 function pushSse(sessionId, event) {
@@ -80,24 +97,28 @@ async function runSession(sessionId, productDescription) {
 
   const history = [{ role: "user", content: contextParts.join("\n\n---\n\n") }];
   activeSessions.set(sessionId, { history, round: 1 });
+  cancelledSessions.delete(sessionId);
 
   try {
     await withRetry(() => db.updateSessionStatus(sessionId, "reviewing"));
     const emit1 = makeEmitter(sessionId, 1);
-    const p1 = await runPhase1(productDescription, history, emit1);
+    const p1 = await runPhase1(productDescription, trimHistory(history, 2), emit1);
+    if (isCancelled(sessionId)) return;
     for (const [key, response] of Object.entries(p1)) {
       history.push({ role: "assistant", content: `[${AGENTS[key].name} - Phase 1]: ${response}` });
     }
 
     await withRetry(() => db.updateSessionStatus(sessionId, "debating"));
     const emit2 = makeEmitter(sessionId, 2);
-    const p2 = await runPhase2(history, p1, emit2);
+    const p2 = await runPhase2(trimHistory(history, 8), p1, emit2);
+    if (isCancelled(sessionId)) return;
     for (const [key, response] of Object.entries(p2)) {
       history.push({ role: "assistant", content: `[${AGENTS[key].name} - Debate]: ${response}` });
     }
 
     const emit3 = makeEmitter(sessionId, 3);
-    const spec = await runPhase3(history, emit3);
+    const spec = await runPhase3(trimHistory(history, 10), emit3);
+    if (isCancelled(sessionId)) return;
     history.push({ role: "assistant", content: `[Product Manager - Revised Spec]: ${spec}` });
     await withRetry(() => db.updateCurrentSpec(sessionId, spec));
 
@@ -135,9 +156,10 @@ async function handleFounderInput(sessionId, content) {
   const founderPrompt = `The founder has responded: "${content}"\n\nIncorporate this into your thinking. React directly to the founder's input from your perspective.`;
 
   for (const agentKey of AGENT_ORDER) {
+    if (isCancelled(sessionId)) break;
     const agent = AGENTS[agentKey];
     pushSse(sessionId, { type: "thinking_start", agentKey, name: agent.name, emoji: agent.emoji });
-    const response = await runAgent(agentKey, history, founderPrompt);
+    const response = await runAgent(agentKey, trimHistory(history, 8), founderPrompt);
     pushSse(sessionId, { type: "thinking_end", agentKey });
     history.push({ role: "assistant", content: `[${agent.name}]: ${response}` });
     await emit({ type: "agent_message", agentKey, name: agent.name, emoji: agent.emoji, content: response, phase: 4 });
@@ -156,18 +178,22 @@ async function improveIdea(sessionId) {
   await emit({ type: "phase_start", phase: 35, label: "PHASE 3.5: IDEA IMPROVEMENT — PM Synthesis" });
 
   pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
-  const revisePrompt = `Based on all board discussion and founder input so far, synthesize an IMPROVED product idea. Incorporate the strongest feedback, address the biggest criticisms, and highlight the best opportunities. Present this as a revised proposal the board can continue discussing.`;
-  const spec = await runAgent("pm", history, revisePrompt);
-  pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
+  const revisePrompt = `Based on all board discussion and founder input so far, produce an IMPROVED product proposal. Your job:\n1. **Preserve the core strengths** — identify what is genuinely working and keep it\n2. **Address the biggest criticisms** — directly fix the weaknesses raised by the board\n3. **Propose a new direction if needed** — if the current approach has fundamental flaws, pivot the product angle, target audience, or business model to something stronger\n4. **Present the improved idea** as a clear, compelling proposal the board can continue discussing\n\nBe bold. If the product needs a new direction to succeed, propose it.`;
 
-  history.push({ role: "assistant", content: `[Product Manager - Improved Idea]: ${spec}` });
-  await emit({ type: "agent_message", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji, content: spec, phase: 35 });
-  await withRetry(() => db.updateCurrentSpec(sessionId, spec));
-
-  await withRetry(() => db.updateSessionStatus(sessionId, "awaiting_founder"));
-  pushSse(sessionId, { type: "status_change", status: "awaiting_founder" });
-
-  activeSessions.set(sessionId, { ...session, history, round });
+  try {
+    const spec = await runAgent("pm", trimHistory(history, 10), revisePrompt);
+    pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
+    history.push({ role: "assistant", content: `[Product Manager - Improved Idea]: ${spec}` });
+    await emit({ type: "agent_message", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji, content: spec, phase: 35 });
+    await withRetry(() => db.updateCurrentSpec(sessionId, spec));
+    await withRetry(() => db.updateSessionStatus(sessionId, "awaiting_founder"));
+    pushSse(sessionId, { type: "status_change", status: "awaiting_founder" });
+    activeSessions.set(sessionId, { ...session, history, round });
+  } catch (err) {
+    console.error("Improve idea error:", err.message);
+    pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
+    pushSse(sessionId, { type: "error", message: err.message });
+  }
 }
 
 async function proceedToVote(sessionId) {
@@ -182,18 +208,18 @@ async function proceedToVote(sessionId) {
   pushSse(sessionId, { type: "status_change", status: "voting" });
 
   pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
-  const finalSpec = await runPhase5(history, emit5);
+  const finalSpec = await runPhase5(trimHistory(history, 10), emit5);
   pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
   history.push({ role: "assistant", content: `[Product Manager - Final Spec]: ${finalSpec}` });
   await withRetry(() => db.updateCurrentSpec(sessionId, finalSpec));
 
-  const { voteResults } = await runPhase6(history, emit6);
+  const { voteResults } = await runPhase6(trimHistory(history, 10), emit6);
 
   const emitFinal = makeEmitter(sessionId, 6);
-  await runFinalOutput(history, voteResults, emitFinal);
+  await runFinalOutput(trimHistory(history, 10), voteResults, emitFinal);
 
   await withRetry(() => db.updateSessionStatus(sessionId, "completed"));
   pushSse(sessionId, { type: "status_change", status: "completed" });
 }
 
-module.exports = { runSession, handleFounderInput, improveIdea, proceedToVote, setSseClients };
+module.exports = { runSession, handleFounderInput, improveIdea, proceedToVote, cancelSession, setSseClients };

@@ -126,8 +126,7 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
         } else if (event.type === 'thinking_start') {
           dispatch({ type: 'SET_THINKING', agent: { agentKey: event.agentKey, name: event.name, emoji: event.emoji } })
         } else if (event.type === 'thinking_end') {
-          dispatch({ type: 'SET_THINKING', agent: null })
-        } else if (event.type === 'agent_message') {
+          dispatch({ type: 'SET_THINKING', agent: null })        } else if (event.type === 'agent_message') {
           dispatch({ type: 'SET_THINKING', agent: null })
           dispatch({
             type: 'ADD_MESSAGE',

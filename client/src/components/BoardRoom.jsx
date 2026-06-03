@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSSEStream } from '../hooks/useSSEStream'
-import { startSession } from '../lib/api'
+import { startSession, stopSession } from '../lib/api'
 import { STATUS_LABELS } from '../lib/agents'
 import AgentCard from './AgentCard'
 import ThinkingCard from './ThinkingCard'
@@ -24,7 +24,9 @@ export default function BoardRoom({ session, onBack }) {
     session.status
   )
   const bottomRef = useRef(null)
+  const scrollContainerRef = useRef(null)
   const startedRef = useRef(false)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // Kick off Phase 1 automatically on first render if still in 'reviewing'
   useEffect(() => {
@@ -35,10 +37,21 @@ export default function BoardRoom({ session, onBack }) {
     }
   }, [session.id, session.status])
 
-  // Auto-scroll to bottom on new messages or thinking state
+  // Show scroll button when user is not near the bottom
   useEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    function onScroll() {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      setShowScrollBtn(distFromBottom > 200)
+    }
+    el.addEventListener('scroll', onScroll)
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  function scrollToBottom() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, votes.length, thinkingAgent])
+  }
 
   const canFounderInput = status === 'awaiting_founder'
   const showVoteButton = status === 'awaiting_founder'
@@ -83,11 +96,19 @@ export default function BoardRoom({ session, onBack }) {
         <div className="flex items-center gap-2">
           <span className={`h-2 w-2 rounded-full ${STATUS_COLORS[status] || 'bg-slate-600'} ${boardBusy ? 'animate-pulse' : ''}`} />
           <span className="text-xs text-slate-400">{STATUS_LABELS[status] || status}</span>
+          {boardBusy && (
+            <button
+              onClick={() => stopSession(session.id).catch(console.error)}
+              className="ml-2 px-2 py-1 text-xs bg-red-700 hover:bg-red-600 text-white rounded-lg transition-colors"
+            >
+              ■ Stop
+            </button>
+          )}
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 max-w-3xl mx-auto w-full">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4 max-w-3xl mx-auto w-full">
         {items.length === 0 && (
           <div className="text-center text-slate-500 text-sm mt-20">
             <div className="text-3xl mb-3 animate-pulse">⚙️</div>
@@ -118,6 +139,17 @@ export default function BoardRoom({ session, onBack }) {
 
         <div ref={bottomRef} />
       </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="fixed bottom-24 right-6 z-50 bg-slate-700 hover:bg-slate-600 text-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg transition-colors"
+          title="Scroll to bottom"
+        >
+          ↓
+        </button>
+      )}
 
       {/* Bottom actions */}
       {showVoteButton && (
