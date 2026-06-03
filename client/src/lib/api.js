@@ -44,6 +44,12 @@ export async function proceedToVote(id) {
   return res.json()
 }
 
+export async function improveIdea(id) {
+  const res = await fetch(`${BASE}/${id}/improve-idea`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to improve idea')
+  return res.json()
+}
+
 export async function getMessages(id, since = null) {
   const url = since ? `${BASE}/${id}/messages?since=${encodeURIComponent(since)}` : `${BASE}/${id}/messages`
   const res = await fetch(url)

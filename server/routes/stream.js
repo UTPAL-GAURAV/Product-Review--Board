@@ -70,4 +70,16 @@ router.post("/:id/proceed-to-vote", async (req, res) => {
   }
 });
 
+router.post("/:id/improve-idea", async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    boardRunner.improveIdea(sessionId).catch((err) => {
+      console.error("Improve idea error:", err.message);
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

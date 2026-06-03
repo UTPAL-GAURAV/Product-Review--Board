@@ -3,6 +3,7 @@ import { useSSEStream } from '../hooks/useSSEStream'
 import { startSession } from '../lib/api'
 import { STATUS_LABELS } from '../lib/agents'
 import AgentCard from './AgentCard'
+import ThinkingCard from './ThinkingCard'
 import PhaseHeader from './PhaseHeader'
 import FounderInputBox from './FounderInputBox'
 import ProceedToVoteButton from './ProceedToVoteButton'
@@ -18,7 +19,7 @@ const STATUS_COLORS = {
 }
 
 export default function BoardRoom({ session, onBack }) {
-  const { messages, phases, votes, status, finalOutput, addFounderMessage } = useSSEStream(
+  const { messages, phases, votes, status, finalOutput, thinkingAgent, addFounderMessage } = useSSEStream(
     session.id,
     session.status
   )
@@ -34,10 +35,10 @@ export default function BoardRoom({ session, onBack }) {
     }
   }, [session.id, session.status])
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or thinking state
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, votes.length])
+  }, [messages.length, votes.length, thinkingAgent])
 
   const canFounderInput = status === 'awaiting_founder'
   const showVoteButton = status === 'awaiting_founder'
@@ -100,6 +101,8 @@ export default function BoardRoom({ session, onBack }) {
             }
             return <AgentCard key={item.message.id || i} message={item.message} />
           })}
+
+          {thinkingAgent && <ThinkingCard agent={thinkingAgent} />}
         </div>
 
         {showVoting && (
@@ -118,7 +121,7 @@ export default function BoardRoom({ session, onBack }) {
 
       {/* Bottom actions */}
       {showVoteButton && (
-        <ProceedToVoteButton sessionId={session.id} />
+        <ProceedToVoteButton key={`vote-btn-${messages.length}`} sessionId={session.id} />
       )}
       {status !== 'completed' && (
         <FounderInputBox

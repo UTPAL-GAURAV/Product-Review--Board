@@ -1,11 +1,14 @@
 import { useEffect, useReducer, useRef } from 'react'
+import { getMessages, getVotes } from '../lib/api'
+import { AGENT_META } from '../lib/agents'
 
 const initialState = {
   messages: [],
-  phases: [],   // { phase, label }
+  phases: [],
   votes: [],
   status: 'reviewing',
   finalOutput: null,
+  thinkingAgent: null, // { agentKey, name, emoji }
 }
 
 function reducer(state, action) {
@@ -21,11 +24,42 @@ function reducer(state, action) {
       return { ...state, status: action.status }
     case 'SET_FINAL_OUTPUT':
       return { ...state, finalOutput: action.content }
-    case 'BULK_LOAD':
-      return { ...state, messages: action.messages, phases: action.phases, status: action.status }
+    case 'SET_THINKING':
+      return { ...state, thinkingAgent: action.agent }
+    case 'BULK_LOAD': {
+      // Reconstruct phases from messages
+      const phases = []
+      const seen = new Set()
+      for (const m of action.messages) {
+        if (!seen.has(m.phase)) {
+          seen.add(m.phase)
+          phases.push({ phase: m.phase, label: phaseLabelFromNumber(m.phase) })
+        }
+      }
+      return {
+        ...state,
+        messages: action.messages,
+        votes: action.votes,
+        phases,
+        status: action.status,
+      }
+    }
     default:
       return state
   }
+}
+
+function phaseLabelFromNumber(phase) {
+  const labels = {
+    1: 'PHASE 1: INITIAL REVIEW — Independent Analysis',
+    2: 'PHASE 2: DEBATE — Challenging Assumptions',
+    3: 'PHASE 3: PRODUCT REVISION',
+    35: 'PHASE 3.5: IDEA IMPROVEMENT — PM Synthesis',
+    4: 'PHASE 4: FOUNDER RESPONSE',
+    5: 'PHASE 5: FINAL REVIEW',
+    6: 'PHASE 6: VOTING',
+  }
+  return labels[phase] || `Phase ${phase}`
 }
 
 export function useSSEStream(sessionId, initialStatus = 'reviewing') {
@@ -34,6 +68,46 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
     status: initialStatus,
   })
   const esRef = useRef(null)
+
+  // Load historical messages for already-started sessions
+  useEffect(() => {
+    if (!sessionId || initialStatus === 'reviewing') return
+
+    async function loadHistory() {
+      try {
+        const [msgs, votes] = await Promise.all([
+          getMessages(sessionId),
+          getVotes(sessionId),
+        ])
+
+        const messages = msgs.map(m => ({
+          id: m.id,
+          agentKey: m.agent_key,
+          name: m.agent_name || (m.role === 'user' ? 'Founder' : ''),
+          emoji: m.agent_key ? (AGENT_META[m.agent_key]?.emoji || '') : '🧑',
+          content: m.content,
+          phase: m.phase,
+          timestamp: m.created_at,
+          isFounder: m.role === 'user',
+        }))
+
+        const formattedVotes = votes.map(v => ({
+          agentKey: v.agent_key,
+          name: v.agent_name,
+          emoji: AGENT_META[v.agent_key]?.emoji || '',
+          vote: v.vote,
+          confidence: v.confidence,
+          reasoning: v.reasoning,
+        }))
+
+        dispatch({ type: 'BULK_LOAD', messages, votes: formattedVotes, status: initialStatus })
+      } catch (err) {
+        console.error('Failed to load history:', err)
+      }
+    }
+
+    loadHistory()
+  }, [sessionId, initialStatus])
 
   useEffect(() => {
     if (!sessionId) return
@@ -49,7 +123,12 @@ export function useSSEStream(sessionId, initialStatus = 'reviewing') {
 
         if (event.type === 'phase_start') {
           dispatch({ type: 'PHASE_START', phase: event.phase, label: event.label })
+        } else if (event.type === 'thinking_start') {
+          dispatch({ type: 'SET_THINKING', agent: { agentKey: event.agentKey, name: event.name, emoji: event.emoji } })
+        } else if (event.type === 'thinking_end') {
+          dispatch({ type: 'SET_THINKING', agent: null })
         } else if (event.type === 'agent_message') {
+          dispatch({ type: 'SET_THINKING', agent: null })
           dispatch({
             type: 'ADD_MESSAGE',
             message: {
