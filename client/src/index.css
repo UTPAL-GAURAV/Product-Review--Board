@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background-color: #0f1117;
+  color: #e2e8f0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Markdown content styles */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+.markdown-content h1 { font-size: 1.1rem; }
+.markdown-content h2 { font-size: 1rem; }
+.markdown-content h3 { font-size: 0.95rem; }
+.markdown-content p { margin-bottom: 0.5rem; }
+.markdown-content ul,
+.markdown-content ol { padding-left: 1.25rem; margin-bottom: 0.5rem; }
+.markdown-content li { margin-bottom: 0.2rem; }
+.markdown-content strong { font-weight: 700; }
+.markdown-content code {
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.85em;
+}
