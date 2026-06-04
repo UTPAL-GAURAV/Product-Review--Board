@@ -101,6 +101,12 @@ export default function BoardRoom({ session, onBack }) {
 
       {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4 max-w-3xl mx-auto w-full">
+        {/* Original idea card */}
+        <div className="mb-4 bg-slate-900 border border-slate-700 rounded-xl p-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Your Idea</p>
+          <p className="text-white text-sm whitespace-pre-wrap">{session.product_description}</p>
+        </div>
+
         {items.length === 0 && (
           <div className="text-center text-slate-500 text-sm mt-20">
             <div className="text-3xl mb-3 animate-pulse">⚙️</div>
