@@ -68,7 +68,7 @@ function makeEmitter(sessionId, round = 1) {
         role: "assistant",
         content: event.content,
         round_number: round,
-        phase: event.phase,
+        phase: event.phase != null ? Math.round(event.phase) : null,
       }));
     } else if (event.type === "vote") {
       const agentId = await withRetry(() => db.getAgentIdByRoleKey(event.agentKey));
@@ -144,6 +144,7 @@ async function runSession(sessionId, productDescription) {
 }
 
 async function handleFounderInput(sessionId, content) {
+  cancelledSessions.delete(sessionId);
   let session = activeSessions.get(sessionId);
   if (!session) {
     console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
@@ -168,17 +169,8 @@ async function handleFounderInput(sessionId, content) {
   const emit = makeEmitter(sessionId, round);
   await emit({ type: "phase_start", phase: 4, label: "PHASE 4: FOUNDER RESPONSE" });
 
-  // PM advocates on behalf of the founder first
-  const pmAdvocatePrompt = `The founder has said: "${content}"\n\nAs Product Manager, your job is to:\n1. Interpret and strengthen the founder's position\n2. Answer any open questions from the board that the founder hasn't addressed\n3. Think through implications the founder may not have considered\n4. Present the founder's refined stance clearly\n\nSpeak as a thinking partner for the founder, not as a critic.`;
-
-  pushSse(sessionId, { type: "thinking_start", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji });
-  const pmResponse = await runAgent("pm", trimHistory(history, 8), pmAdvocatePrompt);
-  pushSse(sessionId, { type: "thinking_end", agentKey: "pm" });
-  history.push({ role: "assistant", content: `[Product Manager - Founder Advocate]: ${pmResponse}` });
-  await emit({ type: "agent_message", agentKey: "pm", name: AGENTS.pm.name, emoji: AGENTS.pm.emoji, content: pmResponse, phase: 4 });
-
-  // Board reacts to the PM's advocacy
-  const boardPrompt = `The founder has responded and the PM has clarified their position. React from YOUR perspective only — one focused response, no summarizing others.`;
+  // Each board member reacts directly to the founder's message
+  const boardPrompt = `The founder has just said: "${content}"\n\nReact directly to the founder from YOUR role's perspective only — one focused response. No summarizing other board members.`;
 
   for (const agentKey of BOARD_MEMBERS) {
     if (isCancelled(sessionId)) break;
@@ -208,6 +200,7 @@ async function rebuildSession(sessionId) {
 }
 
 async function improveIdea(sessionId, founderNote = "") {
+  cancelledSessions.delete(sessionId);
   let session = activeSessions.get(sessionId);
   if (!session) {
     console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
@@ -249,6 +242,7 @@ async function improveIdea(sessionId, founderNote = "") {
 }
 
 async function proceedToVote(sessionId) {
+  cancelledSessions.delete(sessionId);
   let session = activeSessions.get(sessionId);
   if (!session) {
     console.log(`[session] ${sessionId} not in memory, rebuilding from DB...`);
